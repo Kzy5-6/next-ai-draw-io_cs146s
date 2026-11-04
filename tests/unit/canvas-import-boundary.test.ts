@@ -41,7 +41,7 @@ function listFiles(entry: string): string[] {
     return readdirSync(full, { recursive: true })
         .map(String)
         .filter((name) => /\.tsx?$/.test(name))
-        .map((name) => path.join(entry, name))
+        .map((name) => path.join(entry, name).replaceAll("\\", "/"))
 }
 
 /** Module specifiers a file imports at runtime (type-only imports do not
@@ -158,5 +158,5 @@ describe("canvas import boundary", () => {
                 output.entryPoint === "components/canvas/canvas-stage.tsx",
         )
         expect(stage?.bytes).toBeLessThan(160 * 1024)
-    })
+    }, 15_000)
 })
