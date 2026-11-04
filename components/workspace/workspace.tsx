@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 import { CanvasStage } from "@/components/canvas/canvas-stage"
 import { CompareDialog } from "@/components/canvas/compare-dialog"
+import { MissingLabelDevPanel } from "@/components/canvas/missing-label-dev-panel"
 import { SelectionAsk } from "@/components/canvas/selection-ask"
 import {
     ChatEngineProvider,
@@ -278,10 +279,13 @@ function WorkspaceLayout() {
                         style={isMobile ? undefined : { right: canvasRight }}
                         hideOverlays={!isMobile && showHero}
                         overlay={(size) => (
-                            <SelectionAsk
-                                width={size.width}
-                                height={size.height}
-                            />
+                            <>
+                                <SelectionAsk
+                                    width={size.width}
+                                    height={size.height}
+                                />
+                                <MissingLabelDevPanel />
+                            </>
                         )}
                         waitForSavedLocale
                     />

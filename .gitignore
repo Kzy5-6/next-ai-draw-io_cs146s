@@ -81,3 +81,6 @@ ai-models.json
 
 # admin panel settings (contains secrets)
 data/
+
+# Local generated runtime fixtures
+/.runtime/
