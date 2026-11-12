@@ -274,7 +274,7 @@ function normalizePage(
 
 export function adaptDiagramXml(xml: string): AdapterResult {
     try {
-        if (!xml || !xml.trim()) {
+        if (typeof xml !== "string" || !xml.trim()) {
             return invalid("EMPTY_INPUT", "��������Ϊ��")
         }
 
@@ -284,7 +284,11 @@ export function adaptDiagramXml(xml: string): AdapterResult {
             return invalid("FILE_TOO_LARGE", "�ļ����� 2 MiB ����")
         }
 
-        if (/<!DOCTYPE|<!ENTITY/i.test(xml)) {
+        const xmlForDtdCheck = xml
+            .replace(/<!--[\s\S]*?-->/g, "")
+            .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
+
+        if (/<!DOCTYPE|<!ENTITY/i.test(xmlForDtdCheck)) {
             return invalid("DTD_FORBIDDEN", "������ DTD ��ʵ������")
         }
 
@@ -344,7 +348,11 @@ export function adaptDiagramXml(xml: string): AdapterResult {
                         )
                     }
 
-                    if (/<!DOCTYPE|<!ENTITY/i.test(decompressed)) {
+                    const decompressedForDtdCheck = decompressed
+                        .replace(/<!--[\s\S]*?-->/g, "")
+                        .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
+
+                    if (/<!DOCTYPE|<!ENTITY/i.test(decompressedForDtdCheck)) {
                         return invalid(
                             "DTD_FORBIDDEN",
                             "解压页面不允许 DTD 或实体声明",

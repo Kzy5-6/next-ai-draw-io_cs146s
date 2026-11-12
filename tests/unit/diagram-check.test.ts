@@ -69,6 +69,27 @@ describe("diagram check rules", () => {
         )
     })
 
+    it("reports whitespace-only process labels as missing", () => {
+        const data: DiagramCheckData = {
+            ...sampleData,
+            pages: sampleData.pages.map((page) => ({
+                ...page,
+                nodes: page.nodes.map((node) =>
+                    node.id === "n1" ? { ...node, label: "   " } : node,
+                ),
+            })),
+        }
+
+        const issues = runDiagramRules(data, FLOWCHART_CONFIG)
+        expect(issues).toContainEqual(
+            expect.objectContaining({
+                pageId: "page-a",
+                cellId: "n1",
+                ruleId: "missing-label",
+            }),
+        )
+    })
+
     it("disables missing-endpoint in sketch profile", () => {
         const issues = runDiagramRules(sampleData, SKETCH_CONFIG)
 

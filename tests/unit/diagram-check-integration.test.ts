@@ -112,3 +112,119 @@ describe("diagram check integration", () => {
         expect(report.issues).toEqual([])
     })
 })
+
+describe("property-based behavior", () => {
+    async function runCheck(xml: string) {
+        return checkDiagram({
+            xml,
+            inputName: "property-test.drawio",
+            scope: { kind: "all" },
+            config: FLOWCHART_CONFIG,
+        })
+    }
+
+    function issueKeys(
+        report: Awaited<ReturnType<typeof runCheck>>,
+        pageId?: string,
+    ) {
+        return report.issues
+            .filter((issue) => pageId === undefined || issue.pageId === pageId)
+            .map((issue) => `${issue.pageId}:${issue.cellId}:${issue.ruleId}`)
+            .sort()
+    }
+
+    it("keeps the issue set unchanged when cell order changes", async () => {
+        const original = fixture("labels.drawio")
+        const cellPattern = /<mxCell\b[\s\S]*?<\/mxCell>|<mxCell\b[^>]*\/>/g
+        const cells = original.match(cellPattern)
+
+        expect(cells).not.toBeNull()
+        if (!cells) return
+
+        const reordered = [...cells.slice(0, 2), ...cells.slice(2).reverse()]
+        let index = 0
+        const changed = original.replace(cellPattern, () => reordered[index++])
+
+        const before = await runCheck(original)
+        const after = await runCheck(changed)
+
+        expect(before.status).toBe("completed")
+        expect(after.status).toBe("completed")
+        expect(issueKeys(after)).toEqual(issueKeys(before))
+    })
+
+    it("keeps structural issues unchanged after translating all coordinates", async () => {
+        const original = fixture("labels.drawio")
+        const translated = original.replace(
+            /<mxGeometry\b[^>]*>/g,
+            (geometry) =>
+                geometry
+                    .replace(
+                        /\bx="(-?\d+(?:\.\d+)?)"/g,
+                        (_, value) => `x="${Number(value) + 1000}"`,
+                    )
+                    .replace(
+                        /\by="(-?\d+(?:\.\d+)?)"/g,
+                        (_, value) => `y="${Number(value) + 500}"`,
+                    ),
+        )
+
+        const before = await runCheck(original)
+        const after = await runCheck(translated)
+
+        expect(before.status).toBe("completed")
+        expect(after.status).toBe("completed")
+        expect(issueKeys(after)).toEqual(issueKeys(before))
+    })
+
+    it("does not let a change on page-a affect page-b issues", async () => {
+        const original = fixture("multi-page.drawio")
+        const changed = original.replace(
+            '<mxCell id="n1" value="Step 1"',
+            '<mxCell id="n1" value="   "',
+        )
+
+        const before = await runCheck(original)
+        const after = await runCheck(changed)
+
+        expect(before.status).toBe("completed")
+        expect(after.status).toBe("completed")
+        expect(issueKeys(after, "page-b")).toEqual(issueKeys(before, "page-b"))
+    })
+
+    it("removes the missing-label issue after supplying a label", async () => {
+        const original = fixture("labels.drawio")
+        const repaired = original.replace(
+            'id="n2" value="   "',
+            'id="n2" value="Step 2"',
+        )
+
+        const before = await runCheck(original)
+        const after = await runCheck(repaired)
+
+        expect(before.issues).toContainEqual(
+            expect.objectContaining({
+                cellId: "n2",
+                ruleId: "missing-label",
+            }),
+        )
+        expect(after.issues).not.toContainEqual(
+            expect.objectContaining({
+                cellId: "n2",
+                ruleId: "missing-label",
+            }),
+        )
+    })
+
+    it("does not mutate the input when checking it repeatedly", async () => {
+        const original = fixture("labels.drawio")
+        const snapshot = original
+
+        const first = await runCheck(original)
+        const second = await runCheck(original)
+
+        expect(original).toBe(snapshot)
+        expect(second.issues).toEqual(first.issues)
+        expect(second.summary).toEqual(first.summary)
+    })
+})
