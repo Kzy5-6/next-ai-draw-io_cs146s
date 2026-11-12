@@ -1,0 +1,54 @@
+name: Course HW5 CLI and diagram checks
+
+on:
+  pull_request:
+    branches:
+      - course/main
+
+permissions:
+  contents: read
+
+jobs:
+  cli-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run diagram and CLI tests
+        run: npm run test -- --run tests/unit/diagram-check-adapter.test.ts tests/unit/diagram-check-compare.test.ts tests/unit/diagram-check-integration.test.ts tests/unit/diagram-check.test.ts tests/unit/course-cli.test.ts
+
+      - name: Build course CLI
+        run: npm run course:build
+
+      - name: Check normal fixture
+        run: npm run course:check -- --input course-fixtures/normal.drawio --output .runtime/normal.json
+
+      - name: Explain missing report
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f .runtime/normal.json ]; then
+            echo "::warning::The normal fixture report was not created. Inspect the earlier failed step logs."
+          fi
+
+      - name: Upload diagram check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw5-normal-diagram-report
+          path: .runtime/normal.json
+          if-no-files-found: warn
+          retention-days: 14
