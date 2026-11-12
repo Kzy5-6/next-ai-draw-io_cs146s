@@ -1,55 +1,196 @@
 # HW5 — CLI and CI
 
-## Build behavior
+## Build Behavior
 
-`course:check` and `course:compare` use npm lifecycle pre-scripts to run `course:build` first. The build bundles the Node execution path with esbuild into `.runtime/course-cli.cjs`. This generated directory is local and ignored by Git.
+`course:check` and `course:compare` use npm lifecycle pre-scripts to run `course:build` first.
+
+The build bundles the Node.js execution path with esbuild into `.runtime/course-cli.cjs`. This generated directory is local and ignored by Git.
+
+### Build and Run Commands
 
 ```powershell
 npm ci
 npm run course:build
 node .runtime/course-cli.cjs --help
+
 npm run course:check -- --input course-fixtures/normal.drawio --output .runtime/normal.json
 npm run course:check -- --input course-fixtures/batch --fail-on warning --output .runtime/batch.json
 npm run course:check -- --input course-fixtures/batch --dry-run
+
 npm run course:compare -- --before .runtime/before.json --after .runtime/after.json
-Built-in configurations are flowchart (default) and sketch. A JSON configuration can be supplied with --config path/to/config.json.
-CLI behavior
-Directory mode scans only direct child files with the .drawio extension. It does not recurse into nested directories or follow directory entries that are symbolic links. Files are processed in stable filename order.
+```
 
-A batch report contains one result for each selected input, including invalid or failed files. One invalid file does not stop the remaining checks.
+Built-in configurations are:
 
---dry-run validates arguments, configuration, input selection, and output destination without parsing diagram contents, running rules, creating directories, or writing reports.
+- `flowchart` (default)
+- `sketch`
 
-An existing output file is protected unless --force is supplied. The report is written through a temporary file and renamed only after the temporary write succeeds.
+A custom JSON configuration can be supplied using `--config path/to/config.json`.
 
-Exit codes:
-- 0: checks completed and no issue met the selected failure threshold.
-- 1: at least one completed report met --fail-on (error by default; warning includes warnings; none disables issue-based failure).
-- 2: invalid CLI arguments/configuration/input, malformed XML in a batch, failed execution, or an incomparable report.
-A batch with three completed files and one invalid XML file writes all four results and exits 2.
-Compare behavior
-Compare requires completed reports with compatible schema and scope. Issue identity uses page ID, cell ID, and rule ID; message text and generatedAt do not affect identity. Configuration digest changes are reported separately. Incomplete or malformed reports are rejected; the CLI does not infer resolutions from incomplete results.
-CI workflow
-.github/workflows/course-check.yml runs on pull requests whose base branch is course/main. It uses Node 24, runs npm ci, TypeScript checking, the diagram and CLI test set, builds the CLI, and checks normal.drawio.
+## CLI Behavior
 
-The report artifact is uploaded with if: always(). If the normal report was not created, the workflow emits a warning directing the reader to earlier logs.
-Local verification record
-The following behaviors were exercised locally during HW5 development:
-- normal.drawio: completed, exit 0.
-- labels.drawio with default --fail-on error: exit 0.
-- labels.drawio with --fail-on warning: exit 1.
-- batch: completed: 3, failed: 1; the invalid fourth input did not discard the first three; exit 2.
-- --dry-run: emitted the plan and did not create the requested report.
-- Comparing an identical report: no added, resolved, or persisting issues.
-- Comparing normal and labels reports: detected the missing-label issue as added.
-- Existing output without --force: exit 2; with --force: report replaced successfully.
-- Missing output parent: rejected without creating the directory.
-CI run links and failure diagnosis
-Fill in these fields after running the workflow on the personal fork. Do not substitute local results for GitHub Actions run URLs.
-- Successful normal PR Actions run: TODO — paste the run URL.
-- Downloadable artifact name: hw5-normal-diagram-report.
-- Expected-failure demonstration PR Actions run: TODO — paste the run URL.
-- Expected-failure demonstration PR: TODO — paste the PR URL; close it after recording the run.
-For the expected-failure demonstration, use a temporary PR change that makes the workflow check a known-invalid diagram fixture. Confirm from the Actions log that the failure is the expected diagram/input failure (rather than dependency installation, TypeScript, or test execution), verify the CLI exit code is 2, record the run URL, and close the demonstration PR without merging.
+### Directory Mode
 
-For any real CI failure, record the failing step, relevant log excerpt, diagnosis category (configuration, graph issue/threshold, or execution/tooling), the smallest corrective change, and the rerun URL. If GitHub Actions is disabled for the fork, record the repository setting prompt and the equivalent local commands and exit codes instead.
+Directory mode follows these rules:
+
+- Scans only direct child files with the `.drawio` extension.
+- Does not recursively scan nested directories.
+- Does not follow directory entries that are symbolic links.
+- Processes files in stable filename order.
+
+### Batch Reports
+
+A batch report contains one result for each selected input, including invalid or failed files.
+
+An invalid file does not stop the remaining checks from executing.
+
+### Dry Run
+
+The `--dry-run` option validates:
+
+- CLI arguments.
+- Configuration.
+- Input selection.
+- Output destination.
+
+It does not:
+
+- Parse diagram contents.
+- Run validation rules.
+- Create directories.
+- Write reports.
+
+### Output Protection
+
+An existing output file is protected unless `--force` is supplied.
+
+Reports are written through a temporary file and renamed only after the temporary write succeeds.
+
+### Exit Codes
+
+| Exit Code | Description |
+|---|---|
+| `0` | Checks completed and no issue met the selected failure threshold. |
+| `1` | At least one completed report met `--fail-on`. |
+| `2` | Invalid CLI arguments/configuration/input, malformed XML in a batch, failed execution, or an incomparable report. |
+
+The default `--fail-on` threshold is `error`.
+
+Available thresholds:
+
+- `error` (default): Fails when errors are reported.
+- `warning`: Fails when warnings or errors are reported.
+- `none`: Disables issue-based failure.
+
+**Example:** A batch containing three completed files and one invalid XML file writes all four results and exits with code `2`.
+
+## Compare Behavior
+
+The compare command requires completed reports with compatible schema and scope.
+
+Issue identity is determined by:
+
+- Page ID
+- Cell ID
+- Rule ID
+
+Message text and `generatedAt` do not affect issue identity.
+
+Configuration digest changes are reported separately.
+
+Incomplete or malformed reports are rejected. The CLI does not infer resolutions from incomplete results.
+
+## CI Workflow
+
+The GitHub Actions workflow is located at:
+
+`.github/workflows/course-check.yml`
+
+### Workflow Triggers
+
+The workflow runs on pull requests whose base branch is `course/main`.
+
+### Workflow Steps
+
+The workflow uses Node.js 24 and performs the following steps:
+
+1. Runs `npm ci`.
+2. Performs TypeScript checking.
+3. Runs the diagram and CLI test set.
+4. Builds the CLI.
+5. Checks `normal.drawio`.
+
+### Artifact Upload
+
+The report artifact is uploaded using `if: always()`.
+
+If the normal report was not created, the workflow emits a warning directing the reader to the earlier logs.
+
+**Artifact name:** `hw5-normal-diagram-report`
+
+## Local Verification Record
+
+The following behaviors were exercised locally during HW5 development.
+
+| Test Case | Expected/Observed Result | Exit Code |
+|---|---|---|
+| `normal.drawio` | Completed successfully | `0` |
+| `labels.drawio` with default `--fail-on error` | Completed successfully | `0` |
+| `labels.drawio` with `--fail-on warning` | Warning threshold triggered failure | `1` |
+| Batch with four inputs | 3 completed, 1 failed; invalid input did not discard the first three results | `2` |
+| `--dry-run` | Printed the execution plan without creating the requested report | `0` |
+| Comparing identical reports | No added, resolved, or persisting issues | `0` |
+| Comparing normal and labels reports | Detected the missing-label issue as added | `0` |
+| Existing output without `--force` | Output protected; operation rejected | `2` |
+| Existing output with `--force` | Report replaced successfully | `0` |
+| Missing output parent directory | Rejected without creating the directory | `2` |
+
+## CI Run Links and Failure Diagnosis
+
+> **Important:** Complete this section after running the workflow on the personal GitHub fork. Do not substitute local verification results for GitHub Actions run URLs.
+
+### GitHub Actions Runs
+
+| Item | Result |
+|---|---|
+| Successful normal PR Actions run | TODO — Paste the GitHub Actions run URL |
+| Downloadable artifact name | `hw5-normal-diagram-report` |
+| Expected-failure demonstration PR Actions run | TODO — Paste the GitHub Actions run URL |
+| Expected-failure demonstration PR | TODO — Paste the pull request URL |
+
+### Expected-Failure Demonstration
+
+Perform the following steps:
+
+1. Create a temporary pull request containing a change that makes the workflow check a known-invalid diagram fixture.
+2. Verify that the GitHub Actions workflow fails for the expected diagram/input failure.
+3. Confirm from the Actions logs that the failure is not caused by:
+   - Dependency installation.
+   - TypeScript checking.
+   - Test execution.
+4. Verify that the CLI exits with code `2`.
+5. Record the GitHub Actions run URL.
+6. Record the demonstration pull request URL.
+7. Close the demonstration pull request without merging it.
+
+### Real CI Failure Diagnosis
+
+For any actual CI failure, record the following information:
+
+| Field | Description |
+|---|---|
+| Failing step | Name of the failed GitHub Actions step |
+| Relevant log excerpt | The relevant error message or log output |
+| Diagnosis category | Configuration, graph issue/threshold, or execution/tooling |
+| Smallest corrective change | The minimum change required to fix the failure |
+| Rerun URL | GitHub Actions URL for the verification run |
+
+### GitHub Actions Disabled
+
+If GitHub Actions is disabled for the fork:
+
+- Record the repository setting prompt indicating that Actions must be enabled.
+- Record the equivalent local verification commands.
+- Include the corresponding local exit codes.
+
+Do not claim that a GitHub Actions run succeeded if the workflow was only verified locally.
