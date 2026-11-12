@@ -1,6 +1,6 @@
-import { build } from "esbuild"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
+import { build } from "esbuild"
 
 const root = process.cwd()
 const output = path.join(root, ".runtime", "course-cli.cjs")
