@@ -153,10 +153,10 @@ The following behaviors were exercised locally during HW5 development.
 
 | Item | Result |
 |---|---|
-| Successful normal PR Actions run | TODO — Paste the GitHub Actions run URL |
+| Successful normal PR Actions run | [Successful run #43164123007](https://github.com/Kzy5-6/next-ai-draw-io_cs146s/actions/runs/43164123007) |
 | Downloadable artifact name | `hw5-normal-diagram-report` |
-| Expected-failure demonstration PR Actions run | TODO — Paste the GitHub Actions run URL |
-| Expected-failure demonstration PR | TODO — Paste the pull request URL |
+| Expected-failure demonstration PR Actions run | [Expected-failure run #43167295613](https://github.com/Kzy5-6/next-ai-draw-io_cs146s/actions/runs/43167295613) |
+| Expected-failure demonstration PR | [Expected-failure PR #4](https://github.com/Kzy5-6/next-ai-draw-io_cs146s/pull/4) |
 
 ### Expected-Failure Demonstration
 
