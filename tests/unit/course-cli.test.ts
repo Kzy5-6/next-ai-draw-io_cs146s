@@ -217,3 +217,61 @@ describe("course CLI subprocess", () => {
         )
     })
 })
+
+it("uses the same absolute output path in dry-run and a real write", () => {
+    const input = path.join(fixtures, "normal.drawio")
+    const output = path.join(tempRoot, "absolute-path-check.json")
+
+    const planned = run([
+        "check",
+        "--input",
+        input,
+        "--output",
+        output,
+        "--dry-run",
+    ])
+    expect(planned.status).toBe(0)
+
+    const plan = JSON.parse(planned.stdout)
+    expect(plan.output).toBe(path.resolve(output))
+    expect(plan.writesFiles).toBe(false)
+    expect(existsSync(output)).toBe(false)
+
+    const actual = check(input, output)
+    expect(actual.status).toBe(0)
+    expect(existsSync(output)).toBe(true)
+    expect(actual.stdout).toContain(plan.output)
+})
+
+it("does not leak input content or environment secrets into CLI logs", () => {
+    const input = path.join(tempRoot, "log-safety.drawio")
+    const output = path.join(tempRoot, "log-safety.json")
+    const inputSecret = "HW6_INPUT_CONTENT_SECRET_7f31"
+    const envSecret = "HW6_ENVIRONMENT_SECRET_9c42"
+
+    const xml = readFileSync(
+        path.join(fixtures, "normal.drawio"),
+        "utf8",
+    ).replace("<mxGraphModel", `<!-- ${inputSecret} --><mxGraphModel`)
+    writeFileSync(input, xml, "utf8")
+
+    const result = spawnSync(
+        process.execPath,
+        [cli, "check", "--input", input, "--output", output],
+        {
+            cwd: root,
+            encoding: "utf8",
+            windowsHide: true,
+            env: {
+                ...process.env,
+                HW6_TEST_SECRET: envSecret,
+            },
+        },
+    )
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).not.toContain(inputSecret)
+    expect(result.stderr).not.toContain(inputSecret)
+    expect(result.stdout).not.toContain(envSecret)
+    expect(result.stderr).not.toContain(envSecret)
+})

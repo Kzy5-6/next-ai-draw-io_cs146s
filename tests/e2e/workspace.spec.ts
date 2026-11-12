@@ -117,10 +117,12 @@ async function clickEmptyCanvas(page: Page, shape: Locator) {
     const shapeBox = await boxOf(shape)
     const shapeX = shapeBox.x + shapeBox.width / 2
     const shapeY = shapeBox.y + shapeBox.height / 2
+    const inBottomRight =
+        shapeX >= box.x + box.width / 2 && shapeY >= box.y + box.height / 2
     await container.click({
         position: {
-            x: shapeX < box.x + box.width / 2 ? box.width - 20 : 20,
-            y: shapeY < box.y + box.height / 2 ? box.height - 20 : 20,
+            x: box.width - 20,
+            y: inBottomRight ? 20 : box.height - 20,
         },
     })
 }
@@ -145,9 +147,8 @@ function paperWidth(page: Page) {
 
 /** Zooms with draw.io's own shortcut, the focus in an empty canvas corner */
 async function zoomCanvas(page: Page, direction: "in" | "out") {
-    await getIframeContent(page)
-        .locator(".geDiagramContainer")
-        .click({ position: { x: 20, y: 20 } })
+    const canvas = getIframeContent(page).locator(".geDiagramContainer")
+    await canvas.focus()
     await page.keyboard.press(
         direction === "in" ? "ControlOrMeta+Equal" : "ControlOrMeta+Minus",
     )
