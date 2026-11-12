@@ -33,22 +33,22 @@ jobs:
       - name: Build course CLI
         run: npm run course:build
 
-      - name: Check normal fixture
-        run: npm run course:check -- --input course-fixtures/normal.drawio --output .runtime/normal.json
+      - name: Run expected-failure batch fixture
+        run: npm run course:check -- --input course-fixtures/batch --output .runtime/failure-demo.json
 
       - name: Explain missing report
         if: always()
         shell: bash
         run: |
-          if [ ! -f .runtime/normal.json ]; then
-            echo "::warning::The normal fixture report was not created. Inspect the earlier failed step logs."
+          if [ ! -f .runtime/failure-demo.json ]; then
+            echo "::warning::The expected-failure batch report was not created. Inspect the earlier failed step logs."
           fi
 
       - name: Upload diagram check report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hw5-normal-diagram-report
-          path: .runtime/normal.json
+          name: hw5-expected-failure-report
+          path: .runtime/failure-demo.json
           if-no-files-found: warn
           retention-days: 14
