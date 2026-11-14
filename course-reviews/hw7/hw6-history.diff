@@ -1,0 +1,688 @@
+diff --git a/course-notes/HW6.md b/course-notes/HW6.md
+new file mode 100644
+index 0000000..a01a75f
+--- /dev/null
++++ b/course-notes/HW6.md
+@@ -0,0 +1,70 @@
++# HW6 ? Quality Engineering and Testing
++
++## Overview
++
++This assignment strengthens the diagram validation and reporting workflow through boundary testing, property-based testing, CLI verification, safe report writing, browser regression tests, and mutation testing.
++
++The implementation focuses on preserving validation correctness at input boundaries, preventing unsafe XML processing, ensuring deterministic CLI behavior, and avoiding data loss when report writes fail.
++
++## Implementation
++
++- Updated `lib/diagram-check-adapter.ts` to ignore `DOCTYPE` and `ENTITY` text inside XML comments and CDATA while continuing to reject actual DTD declarations.
++- Added `tools/make_safety_cases.py` to generate local safety fixtures. Generated `.runtime` data is ignored and is not required by the unit tests.
++- Added adapter boundary tests that construct their inputs dynamically, avoiding dependencies on local fixture files.
++- Added property tests for cell ordering, coordinate translation, page isolation, label validation, and input immutability.
++- Added CLI tests for dry-run/write path consistency and sensitive-data redaction in logs.
++- Extracted safe report writing into `lib/write-report-safely.ts`. A failed replacement preserves the previous report and cleans up the temporary file.
++- Updated browser test helpers to make canvas zoom and empty-canvas interactions reliable when floating UI panels are present.
++
++## Test Coverage
++
++| Area | Coverage |
++|---|---|
++| Input boundaries | Cell-count, page-count, file-size, decompressed-size, empty input, and small valid input |
++| XML safety | DTD and entity rejection; comment and CDATA handling |
++| Diagram structure | Multiple pages, page isolation, duplicate IDs across pages, and validation behavior |
++| Property testing | Ordering, coordinate translation, page isolation, label correction, and immutability |
++| CLI | Dry-run/write consistency and log redaction |
++| Report writing | Failed replacement preserves the existing report and removes temporary files |
++| Browser E2E | Workspace interactions, zoom, canvas selection, and export-related regressions |
++
++Boundary coverage includes 9,999/10,000/10,001 cells, 20/21 pages, 2 MiB and 2 MiB + 1 byte files, and the decompressed-size limit.
++
++## Mutation Testing
++
++Three deliberate mutations were introduced and checked against the test suite:
++
++1. Replacing page-scoped duplicate-ID handling with a global duplicate-ID set was detected by the adapter tests. The cross-page duplicate-ID behavior test failed as expected.
++2. Changing whitespace-only label handling was initially not detected. A regression assertion was added to ensure whitespace-only process labels are reported as missing; the mutation was then detected.
++3. Changing `countItems(null)` from an unknown result to zero was detected by the count-items tests.
++
++All production mutations were restored after testing.
++
++## Verification Results
++
++- Biome check: 8 files checked successfully.
++- Adapter tests: 27 passed.
++- Full unit test suite: 94 test files and 1,014 tests passed.
++- Workspace E2E suite: 142 tests passed in total. One test that initially timed out during application startup passed when rerun independently.
++- Additional focused E2E regression checks passed.
++- Production build: passed. Next.js completed compilation, TypeScript validation, page-data collection, generation of 91 static pages, and final optimization.
++
++The production build emitted four Turbopack warnings about dynamic filesystem access in existing admin settings and server model configuration code. These warnings concern output tracing and deployment size, not build failure.
++
++## Dependency Security Audit
++
++`npm audit --omit=dev` reported 10 vulnerabilities: 1 low, 6 moderate, 2 high, and 1 critical.
++
++The reported dependency paths include Next.js, Zod, sanitize-html through article extraction dependencies, and undici through the AI SDK dependency tree. No dependency upgrades or lockfile changes were made as part of this assignment. The audit therefore remains an outstanding dependency-maintenance item rather than a passing check.
++
++## Commands Used
++
++```powershell
++npx.cmd biome check
++npx.cmd vitest run tests/unit/diagram-check-adapter.test.ts
++npx.cmd vitest run
++npx.cmd playwright test tests/e2e/workspace.spec.ts
++npm.cmd run build
++npm.cmd audit --omit=dev
++Outcome
++The validation, CLI, report-writing, and browser workflows have expanded regression coverage. Boundary and mutation tests provide evidence that important failure cases are detected, while the full unit suite, browser tests, and production build pass. Dependency audit findings and existing Turbopack filesystem-tracing warnings are documented separately and were not silently treated as resolved.
+diff --git a/lib/diagram-check-adapter.ts b/lib/diagram-check-adapter.ts
+index 57bc896..5e1ca4b 100644
+--- a/lib/diagram-check-adapter.ts
++++ b/lib/diagram-check-adapter.ts
+@@ -274,7 +274,7 @@ function normalizePage(
+ 
+ export function adaptDiagramXml(xml: string): AdapterResult {
+     try {
+-        if (!xml || !xml.trim()) {
++        if (typeof xml !== "string" || !xml.trim()) {
+             return invalid("EMPTY_INPUT", "��������Ϊ��")
+         }
+ 
+@@ -284,7 +284,11 @@ export function adaptDiagramXml(xml: string): AdapterResult {
+             return invalid("FILE_TOO_LARGE", "�ļ����� 2 MiB ����")
+         }
+ 
+-        if (/<!DOCTYPE|<!ENTITY/i.test(xml)) {
++        const xmlForDtdCheck = xml
++            .replace(/<!--[\s\S]*?-->/g, "")
++            .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
++
++        if (/<!DOCTYPE|<!ENTITY/i.test(xmlForDtdCheck)) {
+             return invalid("DTD_FORBIDDEN", "������ DTD ��ʵ������")
+         }
+ 
+@@ -344,7 +348,11 @@ export function adaptDiagramXml(xml: string): AdapterResult {
+                         )
+                     }
+ 
+-                    if (/<!DOCTYPE|<!ENTITY/i.test(decompressed)) {
++                    const decompressedForDtdCheck = decompressed
++                        .replace(/<!--[\s\S]*?-->/g, "")
++                        .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
++
++                    if (/<!DOCTYPE|<!ENTITY/i.test(decompressedForDtdCheck)) {
+                         return invalid(
+                             "DTD_FORBIDDEN",
+                             "解压页面不允许 DTD 或实体声明",
+diff --git a/lib/write-report-safely.ts b/lib/write-report-safely.ts
+new file mode 100644
+index 0000000..3aa8af0
+--- /dev/null
++++ b/lib/write-report-safely.ts
+@@ -0,0 +1,17 @@
++import { rename, unlink, writeFile } from "node:fs/promises"
++
++export async function writeReportSafely(
++    output: string,
++    content: string,
++): Promise<void> {
++    const temporary = `${output}.${process.pid}.${Date.now()}.tmp`
++    try {
++        await writeFile(temporary, content, { encoding: "utf8", flag: "wx" })
++        await rename(temporary, output)
++    } catch (error) {
++        await unlink(temporary).catch(() => undefined)
++        throw new Error(
++            `???????????????${error instanceof Error ? error.message : String(error)}`,
++        )
++    }
++}
+diff --git a/tests/e2e/workspace.spec.ts b/tests/e2e/workspace.spec.ts
+index 01ec6f2..07836d0 100644
+--- a/tests/e2e/workspace.spec.ts
++++ b/tests/e2e/workspace.spec.ts
+@@ -117,10 +117,12 @@ async function clickEmptyCanvas(page: Page, shape: Locator) {
+     const shapeBox = await boxOf(shape)
+     const shapeX = shapeBox.x + shapeBox.width / 2
+     const shapeY = shapeBox.y + shapeBox.height / 2
++    const inBottomRight =
++        shapeX >= box.x + box.width / 2 && shapeY >= box.y + box.height / 2
+     await container.click({
+         position: {
+-            x: shapeX < box.x + box.width / 2 ? box.width - 20 : 20,
+-            y: shapeY < box.y + box.height / 2 ? box.height - 20 : 20,
++            x: box.width - 20,
++            y: inBottomRight ? 20 : box.height - 20,
+         },
+     })
+ }
+@@ -145,9 +147,8 @@ function paperWidth(page: Page) {
+ 
+ /** Zooms with draw.io's own shortcut, the focus in an empty canvas corner */
+ async function zoomCanvas(page: Page, direction: "in" | "out") {
+-    await getIframeContent(page)
+-        .locator(".geDiagramContainer")
+-        .click({ position: { x: 20, y: 20 } })
++    const canvas = getIframeContent(page).locator(".geDiagramContainer")
++    await canvas.focus()
+     await page.keyboard.press(
+         direction === "in" ? "ControlOrMeta+Equal" : "ControlOrMeta+Minus",
+     )
+diff --git a/tests/unit/course-cli.test.ts b/tests/unit/course-cli.test.ts
+index 53b34e2..3381552 100644
+--- a/tests/unit/course-cli.test.ts
++++ b/tests/unit/course-cli.test.ts
+@@ -217,3 +217,61 @@ describe("course CLI subprocess", () => {
+         )
+     })
+ })
++
++it("uses the same absolute output path in dry-run and a real write", () => {
++    const input = path.join(fixtures, "normal.drawio")
++    const output = path.join(tempRoot, "absolute-path-check.json")
++
++    const planned = run([
++        "check",
++        "--input",
++        input,
++        "--output",
++        output,
++        "--dry-run",
++    ])
++    expect(planned.status).toBe(0)
++
++    const plan = JSON.parse(planned.stdout)
++    expect(plan.output).toBe(path.resolve(output))
++    expect(plan.writesFiles).toBe(false)
++    expect(existsSync(output)).toBe(false)
++
++    const actual = check(input, output)
++    expect(actual.status).toBe(0)
++    expect(existsSync(output)).toBe(true)
++    expect(actual.stdout).toContain(plan.output)
++})
++
++it("does not leak input content or environment secrets into CLI logs", () => {
++    const input = path.join(tempRoot, "log-safety.drawio")
++    const output = path.join(tempRoot, "log-safety.json")
++    const inputSecret = "HW6_INPUT_CONTENT_SECRET_7f31"
++    const envSecret = "HW6_ENVIRONMENT_SECRET_9c42"
++
++    const xml = readFileSync(
++        path.join(fixtures, "normal.drawio"),
++        "utf8",
++    ).replace("<mxGraphModel", `<!-- ${inputSecret} --><mxGraphModel`)
++    writeFileSync(input, xml, "utf8")
++
++    const result = spawnSync(
++        process.execPath,
++        [cli, "check", "--input", input, "--output", output],
++        {
++            cwd: root,
++            encoding: "utf8",
++            windowsHide: true,
++            env: {
++                ...process.env,
++                HW6_TEST_SECRET: envSecret,
++            },
++        },
++    )
++
++    expect(result.status).toBe(0)
++    expect(result.stdout).not.toContain(inputSecret)
++    expect(result.stderr).not.toContain(inputSecret)
++    expect(result.stdout).not.toContain(envSecret)
++    expect(result.stderr).not.toContain(envSecret)
++})
+diff --git a/tests/unit/diagram-check-adapter.test.ts b/tests/unit/diagram-check-adapter.test.ts
+index 006148b..cdb22d4 100644
+--- a/tests/unit/diagram-check-adapter.test.ts
++++ b/tests/unit/diagram-check-adapter.test.ts
+@@ -250,3 +250,157 @@ describe("wrapped cells and duplicate IDs", () => {
+         expect(result.status).toBe("invalid")
+     })
+ })
++
++describe("XML declaration security boundaries", () => {
++    it("does not reject DOCTYPE text inside an XML comment", () => {
++        const xml = `
++            <!-- <!DOCTYPE is documentation text, not a declaration -->
++            <mxGraphModel>
++                <root>
++                    <mxCell id="0"/>
++                    <mxCell id="1" parent="0"/>
++                    <mxCell id="node-1" value="Start" vertex="1" parent="1"/>
++                </root>
++            </mxGraphModel>
++        `
++
++        const result = adaptDiagramXml(xml)
++        expect(result.status).toBe("ok")
++    })
++
++    it("does not reject DOCTYPE text inside CDATA", () => {
++        const xml = `
++            <mxGraphModel>
++                <root>
++                    <mxCell id="0"/>
++                    <mxCell id="1" parent="0"/>
++                    <mxCell id="node-1" value="Start" vertex="1" parent="1"/>
++                </root>
++                <description><![CDATA[The literal text <!DOCTYPE is not a declaration]]></description>
++            </mxGraphModel>
++        `
++
++        const result = adaptDiagramXml(xml)
++        expect(result.status).toBe("ok")
++    })
++
++    it("still rejects an actual DTD declaration", () => {
++        const xml = `<!DOCTYPE mxGraphModel [<!ENTITY x "test">]>
++            <mxGraphModel>
++                <root>
++                    <mxCell id="0"/>
++                    <mxCell id="1" parent="0"/>
++                </root>
++            </mxGraphModel>
++        `
++
++        const result = adaptDiagramXml(xml)
++        expect(result.status).toBe("invalid")
++        if (result.status === "invalid") {
++            expect(result.code).toBe("DTD_FORBIDDEN")
++        }
++    })
++})
++
++describe("input safety limit boundaries", () => {
++    const safetyFile = (name: string): Buffer => {
++        const diagram = (totalCells: number) => {
++            const extra = Array.from(
++                { length: totalCells - 2 },
++                (_, i) =>
++                    `<mxCell id="c${i + 2}" value="Node ${i + 2}" vertex="1" parent="1"><mxGeometry x="0" y="0" width="80" height="40" as="geometry"/></mxCell>`,
++            ).join("")
++            return (
++                "<mxGraphModel><root>" +
++                '<mxCell id="0"/><mxCell id="1" parent="0"/>' +
++                extra +
++                "</root></mxGraphModel>"
++            )
++        }
++
++        const cellMatch = name.match(/^cells-(\d+)\.drawio$/)
++        if (cellMatch) {
++            return Buffer.from(diagram(Number(cellMatch[1])), "utf8")
++        }
++
++        const pageMatch = name.match(/^pages-(\d+)\.drawio$/)
++        if (pageMatch) {
++            const pages = Array.from(
++                { length: Number(pageMatch[1]) },
++                (_, i) =>
++                    `<diagram id="p${i}" name="Page ${i}">${diagram(2)}</diagram>`,
++            ).join("")
++            return Buffer.from(`<mxfile>${pages}</mxfile>`, "utf8")
++        }
++
++        const sizeMatch = name.match(/^file-(\d+)-bytes\.drawio$/)
++        if (sizeMatch) {
++            const target = Number(sizeMatch[1])
++            const base = diagram(3)
++            const closing = "</mxGraphModel>"
++            const padding = target - Buffer.byteLength(base, "utf8") - 7
++            if (padding < 0) throw new Error("Target size is too small")
++            const exact =
++                base.slice(0, -closing.length) +
++                "<!--" +
++                "x".repeat(padding) +
++                "-->" +
++                closing
++            const result = Buffer.from(exact, "utf8")
++            if (result.length !== target)
++                throw new Error("Incorrect fixture size")
++            return result
++        }
++
++        throw new Error(`Unknown safety fixture: ${name}`)
++    }
++
++    it("accepts a file exactly at the 2 MiB limit", () => {
++        const result = adaptDiagramXml(
++            safetyFile("file-2097152-bytes.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("ok")
++    })
++
++    it("rejects a file one byte above the 2 MiB limit", () => {
++        const result = adaptDiagramXml(
++            safetyFile("file-2097153-bytes.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("invalid")
++    })
++
++    it("accepts exactly 9999 mxCell elements", () => {
++        const result = adaptDiagramXml(
++            safetyFile("cells-9999.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("ok")
++    })
++
++    it("accepts exactly 10000 mxCell elements", () => {
++        const result = adaptDiagramXml(
++            safetyFile("cells-10000.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("ok")
++    })
++
++    it("rejects 10001 mxCell elements", () => {
++        const result = adaptDiagramXml(
++            safetyFile("cells-10001.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("invalid")
++    })
++
++    it("accepts exactly 20 pages", () => {
++        const result = adaptDiagramXml(
++            safetyFile("pages-20.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("ok")
++    })
++
++    it("rejects 21 pages", () => {
++        const result = adaptDiagramXml(
++            safetyFile("pages-21.drawio").toString("utf8"),
++        )
++        expect(result.status).toBe("invalid")
++    })
++})
+diff --git a/tests/unit/diagram-check-integration.test.ts b/tests/unit/diagram-check-integration.test.ts
+index b339868..3639878 100644
+--- a/tests/unit/diagram-check-integration.test.ts
++++ b/tests/unit/diagram-check-integration.test.ts
+@@ -112,3 +112,119 @@ describe("diagram check integration", () => {
+         expect(report.issues).toEqual([])
+     })
+ })
++
++describe("property-based behavior", () => {
++    async function runCheck(xml: string) {
++        return checkDiagram({
++            xml,
++            inputName: "property-test.drawio",
++            scope: { kind: "all" },
++            config: FLOWCHART_CONFIG,
++        })
++    }
++
++    function issueKeys(
++        report: Awaited<ReturnType<typeof runCheck>>,
++        pageId?: string,
++    ) {
++        return report.issues
++            .filter((issue) => pageId === undefined || issue.pageId === pageId)
++            .map((issue) => `${issue.pageId}:${issue.cellId}:${issue.ruleId}`)
++            .sort()
++    }
++
++    it("keeps the issue set unchanged when cell order changes", async () => {
++        const original = fixture("labels.drawio")
++        const cellPattern = /<mxCell\b[\s\S]*?<\/mxCell>|<mxCell\b[^>]*\/>/g
++        const cells = original.match(cellPattern)
++
++        expect(cells).not.toBeNull()
++        if (!cells) return
++
++        const reordered = [...cells.slice(0, 2), ...cells.slice(2).reverse()]
++        let index = 0
++        const changed = original.replace(cellPattern, () => reordered[index++])
++
++        const before = await runCheck(original)
++        const after = await runCheck(changed)
++
++        expect(before.status).toBe("completed")
++        expect(after.status).toBe("completed")
++        expect(issueKeys(after)).toEqual(issueKeys(before))
++    })
++
++    it("keeps structural issues unchanged after translating all coordinates", async () => {
++        const original = fixture("labels.drawio")
++        const translated = original.replace(
++            /<mxGeometry\b[^>]*>/g,
++            (geometry) =>
++                geometry
++                    .replace(
++                        /\bx="(-?\d+(?:\.\d+)?)"/g,
++                        (_, value) => `x="${Number(value) + 1000}"`,
++                    )
++                    .replace(
++                        /\by="(-?\d+(?:\.\d+)?)"/g,
++                        (_, value) => `y="${Number(value) + 500}"`,
++                    ),
++        )
++
++        const before = await runCheck(original)
++        const after = await runCheck(translated)
++
++        expect(before.status).toBe("completed")
++        expect(after.status).toBe("completed")
++        expect(issueKeys(after)).toEqual(issueKeys(before))
++    })
++
++    it("does not let a change on page-a affect page-b issues", async () => {
++        const original = fixture("multi-page.drawio")
++        const changed = original.replace(
++            '<mxCell id="n1" value="Step 1"',
++            '<mxCell id="n1" value="   "',
++        )
++
++        const before = await runCheck(original)
++        const after = await runCheck(changed)
++
++        expect(before.status).toBe("completed")
++        expect(after.status).toBe("completed")
++        expect(issueKeys(after, "page-b")).toEqual(issueKeys(before, "page-b"))
++    })
++
++    it("removes the missing-label issue after supplying a label", async () => {
++        const original = fixture("labels.drawio")
++        const repaired = original.replace(
++            'id="n2" value="   "',
++            'id="n2" value="Step 2"',
++        )
++
++        const before = await runCheck(original)
++        const after = await runCheck(repaired)
++
++        expect(before.issues).toContainEqual(
++            expect.objectContaining({
++                cellId: "n2",
++                ruleId: "missing-label",
++            }),
++        )
++        expect(after.issues).not.toContainEqual(
++            expect.objectContaining({
++                cellId: "n2",
++                ruleId: "missing-label",
++            }),
++        )
++    })
++
++    it("does not mutate the input when checking it repeatedly", async () => {
++        const original = fixture("labels.drawio")
++        const snapshot = original
++
++        const first = await runCheck(original)
++        const second = await runCheck(original)
++
++        expect(original).toBe(snapshot)
++        expect(second.issues).toEqual(first.issues)
++        expect(second.summary).toEqual(first.summary)
++    })
++})
+diff --git a/tests/unit/diagram-check.test.ts b/tests/unit/diagram-check.test.ts
+index 6c64679..94e0a2b 100644
+--- a/tests/unit/diagram-check.test.ts
++++ b/tests/unit/diagram-check.test.ts
+@@ -69,6 +69,27 @@ describe("diagram check rules", () => {
+         )
+     })
+ 
++    it("reports whitespace-only process labels as missing", () => {
++        const data: DiagramCheckData = {
++            ...sampleData,
++            pages: sampleData.pages.map((page) => ({
++                ...page,
++                nodes: page.nodes.map((node) =>
++                    node.id === "n1" ? { ...node, label: "   " } : node,
++                ),
++            })),
++        }
++
++        const issues = runDiagramRules(data, FLOWCHART_CONFIG)
++        expect(issues).toContainEqual(
++            expect.objectContaining({
++                pageId: "page-a",
++                cellId: "n1",
++                ruleId: "missing-label",
++            }),
++        )
++    })
++
+     it("disables missing-endpoint in sketch profile", () => {
+         const issues = runDiagramRules(sampleData, SKETCH_CONFIG)
+ 
+diff --git a/tests/unit/write-report-safely.test.ts b/tests/unit/write-report-safely.test.ts
+new file mode 100644
+index 0000000..79eb068
+--- /dev/null
++++ b/tests/unit/write-report-safely.test.ts
+@@ -0,0 +1,48 @@
++import {
++    mkdir,
++    mkdtemp,
++    readdir,
++    readFile,
++    rm,
++    writeFile,
++} from "node:fs/promises"
++import os from "node:os"
++import path from "node:path"
++import { afterEach, describe, expect, it } from "vitest"
++import { writeReportSafely } from "@/lib/write-report-safely"
++
++const temporaryRoots: string[] = []
++
++afterEach(async () => {
++    await Promise.all(
++        temporaryRoots
++            .splice(0)
++            .map((root) => rm(root, { recursive: true, force: true })),
++    )
++})
++
++describe("safe report writing", () => {
++    it("preserves the existing target when the final rename fails", async () => {
++        const root = await mkdtemp(path.join(os.tmpdir(), "report-write-test-"))
++        temporaryRoots.push(root)
++
++        const output = path.join(root, "existing-report")
++        await mkdir(output)
++        await writeFile(
++            path.join(output, "keep.txt"),
++            "original report",
++            "utf8",
++        )
++
++        await expect(
++            writeReportSafely(output, '{"status":"completed"}'),
++        ).rejects.toThrow()
++
++        expect(await readFile(path.join(output, "keep.txt"), "utf8")).toBe(
++            "original report",
++        )
++
++        const files = await readdir(root)
++        expect(files).toEqual(["existing-report"])
++    })
++})
+diff --git a/tools/make_safety_cases.py b/tools/make_safety_cases.py
+new file mode 100644
+index 0000000..30f35f3
+--- /dev/null
++++ b/tools/make_safety_cases.py
+@@ -0,0 +1,75 @@
++﻿from pathlib import Path
++import argparse
++
++def cell(i):
++    return (
++        f'<mxCell id="c{i}" value="Node {i}" vertex="1" parent="1">'
++        '<mxGeometry x="0" y="0" width="80" height="40" as="geometry"/>'
++        '</mxCell>'
++    )
++
++def diagram(total_cells):
++    # mxGraphModel 自带两个基础 mxCell：id=0 和 id=1
++    extra = ''.join(cell(i) for i in range(2, total_cells))
++    return (
++        '<mxGraphModel><root>'
++        '<mxCell id="0"/>'
++        '<mxCell id="1" parent="0"/>'
++        + extra +
++        '</root></mxGraphModel>'
++    )
++
++def write_exact_size(path, base, target):
++    raw = base.encode("utf-8")
++    closing = b"</mxGraphModel>"
++    assert raw.endswith(closing)
++    padding = target - len(raw) - 7
++    if padding < 0:
++        raise ValueError("Base XML is larger than target size")
++    content = raw[:-len(closing)] + b"<!--" + b"x" * padding + b"-->" + closing
++    assert len(content) == target
++    path.write_bytes(content)
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--output", default=".runtime/safety-inputs")
++    args = parser.parse_args()
++
++    out = Path(args.output)
++    out.mkdir(parents=True, exist_ok=True)
++
++    for total in (9999, 10000, 10001):
++        (out / f"cells-{total}.drawio").write_text(
++            diagram(total), encoding="utf-8"
++        )
++
++    (out / "empty.drawio").write_bytes(b"")
++    (out / "valid-small.drawio").write_text(diagram(3), encoding="utf-8")
++
++    for count in (20, 21):
++        pages = "".join(
++            f'<diagram id="p{i}" name="Page {i}">{diagram(2)}</diagram>'
++            for i in range(count)
++        )
++        (out / f"pages-{count}.drawio").write_text(
++            f"<mxfile>{pages}</mxfile>", encoding="utf-8"
++        )
++
++    base = diagram(3)
++    for size in (2 * 1024 * 1024, 2 * 1024 * 1024 + 1):
++        write_exact_size(
++            out / f"file-{size}-bytes.drawio", base, size
++        )
++
++    print(f"Generated safety cases in {out.resolve()}")
++    for path in sorted(out.glob("*.drawio")):
++        raw = path.read_bytes()
++        cells = raw.count(b"<mxCell ")
++        pages = raw.count(b"<diagram ")
++        print(
++            f"{path.name}: {len(raw)} bytes, "
++            f"{cells} mxCell elements, {pages} pages"
++        )
++
++if __name__ == "__main__":
++    main()

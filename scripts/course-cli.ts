@@ -1,13 +1,5 @@
 import { constants as fsConstants } from "node:fs"
-import {
-    access,
-    readdir,
-    readFile,
-    rename,
-    stat,
-    unlink,
-    writeFile,
-} from "node:fs/promises"
+import { access, readdir, readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import { checkDiagram } from "../lib/diagram-check"
 import { compareDiagramReports } from "../lib/diagram-check-compare"
@@ -17,6 +9,7 @@ import {
     validateRuleConfig,
 } from "../lib/diagram-check-rules"
 import type { DiagramCheckReport, RuleConfig } from "../lib/diagram-check-types"
+import { writeReportSafely } from "../lib/write-report-safely"
 
 type ParsedArgs = {
     values: Map<string, string>
@@ -202,22 +195,6 @@ async function validateOutput(
         throw new Error(`输出路径是目录：${output}`)
     }
     return output
-}
-
-async function writeReportSafely(
-    output: string,
-    content: string,
-): Promise<void> {
-    const temporary = `${output}.${process.pid}.${Date.now()}.tmp`
-    try {
-        await writeFile(temporary, content, { encoding: "utf8", flag: "wx" })
-        await rename(temporary, output)
-    } catch (error) {
-        await unlink(temporary).catch(() => undefined)
-        throw new Error(
-            `写入报告失败，原有报告已保留：${error instanceof Error ? error.message : String(error)}`,
-        )
-    }
 }
 
 function thresholdReached(
