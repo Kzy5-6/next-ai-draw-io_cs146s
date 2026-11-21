@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 import { CanvasStage } from "@/components/canvas/canvas-stage"
 import { CompareDialog } from "@/components/canvas/compare-dialog"
-import { MissingLabelDevPanel } from "@/components/canvas/missing-label-dev-panel"
+import { DiagramCheckPanel } from "@/components/canvas/diagram-check-panel"
 import { SelectionAsk } from "@/components/canvas/selection-ask"
 import {
     ChatEngineProvider,
@@ -284,7 +284,13 @@ function WorkspaceLayout() {
                                     width={size.width}
                                     height={size.height}
                                 />
-                                <MissingLabelDevPanel />
+                                <DiagramCheckPanel
+                                    onHandToAI={(message) => {
+                                        engine.setInput(message)
+                                        setPanelOpen(true)
+                                        focusComposer()
+                                    }}
+                                />
                             </>
                         )}
                         waitForSavedLocale
